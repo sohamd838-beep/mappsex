@@ -22,6 +22,43 @@ interface GeoResult {
   lng: number
 }
 
+async function readJsonResponse(
+  response: Response,
+  apiName: string,
+) {
+  const text = await response.text()
+
+  console.log(`${apiName} status:`, response.status)
+  console.log(
+    `${apiName} content-type:`,
+    response.headers.get('content-type'),
+  )
+  console.log(`${apiName} response:`, text)
+
+  if (!response.ok) {
+    let message = `${apiName} failed with status ${response.status}`
+
+    try {
+      const errorData = JSON.parse(text)
+      if (errorData?.error) {
+        message = errorData.error
+      }
+    } catch {
+      // Response wasn't JSON, so keep the status-based error.
+    }
+
+    throw new Error(message)
+  }
+
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new Error(
+      `${apiName} returned non-JSON data: ${text.slice(0, 150)}`,
+    )
+  }
+}
+
 function LocationInput({
   label,
   value,
@@ -47,9 +84,17 @@ function LocationInput({
         )
 
         if (res.ok) {
-          setResults(await res.json())
+          const data = await readJsonResponse(
+            res,
+            'Geocode API',
+          )
+
+          setResults(data)
+        } else {
+          setResults([])
         }
-      } catch {
+      } catch (error) {
+        console.error('Geocode error:', error)
         setResults([])
       }
     }, 400)
@@ -104,7 +149,11 @@ function sampleWaypoints(
     return []
   }
 
-  const step = Math.max(1, Math.floor(coords.length / count))
+  const step = Math.max(
+    1,
+    Math.floor(coords.length / count),
+  )
+
   const samples: Array<[number, number]> = []
 
   for (let i = 0; i < coords.length; i += step) {
@@ -118,13 +167,20 @@ function sampleWaypoints(
 function Home() {
   const [from, setFrom] = useState<GeoResult | null>(null)
   const [to, setTo] = useState<GeoResult | null>(null)
-  const [routeLine, setRouteLine] = useState<Array<[number, number]>>([])
+
+  const [routeLine, setRouteLine] = useState<
+    Array<[number, number]>
+  >([])
+
   const [routeInfo, setRouteInfo] = useState<{
     distanceMeters: number
     durationSeconds: number
   } | null>(null)
+
   const [places, setPlaces] = useState<Place[]>([])
-  const [selectedPlace, setSelectedPlace] = useState<Place | null>(null)
+  const [selectedPlace, setSelectedPlace] =
+    useState<Place | null>(null)
+
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [points, setPoints] = useState(0)
@@ -134,13 +190,29 @@ function Home() {
     setMounted(true)
 
     fetch(`/api/points?userId=${getUserId()}`)
-      .then((r) => r.json())
-      .then((d) => setPoints(d.total ?? 0))
-      .catch(() => {})
+      .then(async (response) => {
+        if (!response.ok) {
+          return null
+        }
+
+        return readJsonResponse(
+          response,
+          'Points API',
+        )
+      })
+      .then((data) => {
+        if (data) {
+          setPoints(data.total ?? 0)
+        }
+      })
+      .catch((error) => {
+        console.error('Points API error:', error)
+      })
   }, [])
 
   async function findRoute() {
     if (!from || !to) {
+      setError('Please select both From and To locations.')
       return
     }
 
@@ -148,16 +220,31 @@ function Home() {
     setError(null)
     setPlaces([])
     setSelectedPlace(null)
+    setRouteLine([])
+    setRouteInfo(null)
 
     try {
-      const res = await fetch(
-        `/api/route?from=${from.lat},${from.lng}&to=${to.lat},${to.lng}`,
+      console.log('Finding route...')
+      console.log('From:', from)
+      console.log('To:', to)
+
+      const routeUrl =
+        `/api/route?from=${from.lat},${from.lng}` +
+        `&to=${to.lat},${to.lng}`
+
+      console.log('Route API URL:', routeUrl)
+
+      const res = await fetch(routeUrl)
+
+      const data = await readJsonResponse(
+        res,
+        'Route API',
       )
 
-      const data = await res.json()
-
-      if (!res.ok) {
-        throw new Error(data.error ?? 'Route not found')
+      if (!data.geometry?.coordinates) {
+        throw new Error(
+          'Route API returned invalid route geometry.',
+        )
       }
 
       setRouteInfo({
@@ -178,19 +265,44 @@ function Home() {
       )
 
       const pointsParam = waypoints
-        .map(([lat, lng]) => `${lat},${lng}`)
+        .map(
+          ([lat, lng]) =>
+            `${lat},${lng}`,
+        )
         .join('|')
 
-      const placesRes = await fetch(
-        `/api/places?points=${pointsParam}`,
-      )
+      console.log('Route waypoints:', pointsParam)
 
-      if (placesRes.ok) {
-        setPlaces(await placesRes.json())
+      if (pointsParam) {
+        const placesRes = await fetch(
+          `/api/places?points=${pointsParam}`,
+        )
+
+        try {
+          const placesData =
+            await readJsonResponse(
+              placesRes,
+              'Places API',
+            )
+
+          setPlaces(placesData)
+        } catch (placesError) {
+          console.error(
+            'Places API error:',
+            placesError,
+          )
+
+          // Route itself still works even if places fail.
+          setPlaces([])
+        }
       }
     } catch (e) {
+      console.error('Find route error:', e)
+
       setError(
-        e instanceof Error ? e.message : 'Something went wrong',
+        e instanceof Error
+          ? e.message
+          : 'Something went wrong while finding the route.',
       )
     } finally {
       setLoading(false)
@@ -206,12 +318,24 @@ function Home() {
     : null
 
   const fromLatLng = useMemo(
-    () => (from ? { lat: from.lat, lng: from.lng } : null),
+    () =>
+      from
+        ? {
+            lat: from.lat,
+            lng: from.lng,
+          }
+        : null,
     [from],
   )
 
   const toLatLng = useMemo(
-    () => (to ? { lat: to.lat, lng: to.lng } : null),
+    () =>
+      to
+        ? {
+            lat: to.lat,
+            lng: to.lng,
+          }
+        : null,
     [to],
   )
 
@@ -266,15 +390,16 @@ function Home() {
         </div>
 
         {error && (
-          <p className="mb-4 text-sm text-red-500">
+          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600">
             {error}
-          </p>
+          </div>
         )}
 
         {routeInfo && (
           <p className="mb-4 text-sm text-gray-600">
-            {distanceKm} km · about {durationMin} min drive ·{' '}
-            {places.length} places found along the way
+            {distanceKm} km · about {durationMin} min
+            drive · {places.length} places found along
+            the way
           </p>
         )}
 
@@ -291,7 +416,9 @@ function Home() {
                   to={toLatLng}
                   routeLine={routeLine}
                   places={places}
-                  selectedPlaceId={selectedPlace?.id ?? null}
+                  selectedPlaceId={
+                    selectedPlace?.id ?? null
+                  }
                   onSelectPlace={setSelectedPlace}
                 />
               </Suspense>
@@ -301,8 +428,9 @@ function Home() {
           <div className="max-h-[650px] space-y-3 overflow-y-auto pr-1">
             {places.length === 0 && (
               <p className="rounded-2xl border border-dashed border-gray-200 p-6 text-center text-sm text-gray-400">
-                Search a route to discover places along the way —
-                with reels, AI photos, and points for visiting.
+                Search a route to discover places along
+                the way — with reels, AI photos, and
+                points for visiting.
               </p>
             )}
 
