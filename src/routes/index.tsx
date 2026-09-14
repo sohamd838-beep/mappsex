@@ -1,10 +1,14 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { Compass, Navigation, Trophy, Loader2 } from 'lucide-react'
-import { MapView, type Place } from '../components/MapView'
+import type { Place } from '../components/MapView'
 import { PlaceCard } from '../components/PlaceCard'
 import { getUserId } from '../lib/user'
-
+const MapView = lazy(() =>
+  import('../components/MapView').then((module) => ({
+    default: module.MapView,
+  })),
+)
 export const Route = createFileRoute('/')({
   component: Home,
 })
