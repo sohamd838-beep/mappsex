@@ -1,25 +1,35 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentType,
+} from 'react'
 import { Compass, Navigation, Trophy, Loader2 } from 'lucide-react'
 import type { Place } from '../components/MapView'
 import { PlaceCard } from '../components/PlaceCard'
 import { getUserId } from '../lib/user'
-
-const MapView = lazy(() =>
-  import('../components/MapView').then((module) => ({
-    default: module.MapView,
-  })),
-)
-
-export const Route = createFileRoute('/')({
-  component: Home,
-})
 
 interface GeoResult {
   name: string
   lat: number
   lng: number
 }
+
+interface MapViewProps {
+  from: { lat: number; lng: number } | null
+  to: { lat: number; lng: number } | null
+  routeLine: Array<[number, number]>
+  places: Array<Place>
+  selectedPlaceId: number | null
+  onSelectPlace: (place: Place) => void
+}
+
+type MapViewComponent = ComponentType<MapViewProps>
+
+export const Route = createFileRoute('/')({
+  component: Home,
+})
 
 function LocationInput({
   label,
@@ -35,7 +45,9 @@ function LocationInput({
   const [open, setOpen] = useState(false)
 
   useEffect(() => {
-    if (!query || (value && query === value.name)) return
+    if (!query || (value && query === value.name)) {
+      return
+    }
 
     const timeout = setTimeout(async () => {
       try {
@@ -97,7 +109,9 @@ function sampleWaypoints(
   coords: Array<[number, number]>,
   count: number,
 ): Array<[number, number]> {
-  if (coords.length === 0) return []
+  if (coords.length === 0) {
+    return []
+  }
 
   const step = Math.max(1, Math.floor(coords.length / count))
   const samples: Array<[number, number]> = []
@@ -118,24 +132,49 @@ function Home() {
     distanceMeters: number
     durationSeconds: number
   } | null>(null)
+
   const [places, setPlaces] = useState<Place[]>([])
   const [selectedPlace, setSelectedPlace] = useState<Place | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [points, setPoints] = useState(0)
-  const [mounted, setMounted] = useState(false)
+
+  const [MapViewComponent, setMapViewComponent] =
+    useState<MapViewComponent | null>(null)
 
   useEffect(() => {
-    setMounted(true)
+    let active = true
+
+    import('../components/MapView')
+      .then((module) => {
+        if (active) {
+          setMapViewComponent(() => module.MapView)
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setError('Unable to load the map.')
+        }
+      })
 
     fetch(`/api/points?userId=${getUserId()}`)
       .then((r) => r.json())
-      .then((d) => setPoints(d.total ?? 0))
+      .then((d) => {
+        if (active) {
+          setPoints(d.total ?? 0)
+        }
+      })
       .catch(() => {})
+
+    return () => {
+      active = false
+    }
   }, [])
 
   async function findRoute() {
-    if (!from || !to) return
+    if (!from || !to) {
+      return
+    }
 
     setLoading(true)
     setError(null)
@@ -273,21 +312,21 @@ function Home() {
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <div className="h-[500px] overflow-hidden rounded-2xl border border-violet-100 shadow-sm lg:col-span-2 lg:h-[650px]">
-            {mounted && (
-              <Suspense
-                fallback={
-                  <div className="h-full w-full animate-pulse rounded-2xl bg-gray-100" />
-                }
-              >
-                <MapView
-                  from={fromLatLng}
-                  to={toLatLng}
-                  routeLine={routeLine}
-                  places={places}
-                  selectedPlaceId={selectedPlace?.id ?? null}
-                  onSelectPlace={setSelectedPlace}
-                />
-              </Suspense>
+            {MapViewComponent ? (
+              <MapViewComponent
+                from={fromLatLng}
+                to={toLatLng}
+                routeLine={routeLine}
+                places={places}
+                selectedPlaceId={selectedPlace?.id ?? null}
+                onSelectPlace={setSelectedPlace}
+              />
+            ) : (
+              <div className="flex h-full w-full animate-pulse items-center justify-center rounded-2xl bg-gray-100">
+                <span className="text-sm text-gray-400">
+                  Loading map…
+                </span>
+              </div>
             )}
           </div>
 
