@@ -48,25 +48,42 @@ export function MapView({
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
+
       {routeLine.length > 0 && (
-        <Polyline positions={routeLine} color="#7c3aed" weight={5} opacity={0.8} />
+        <Polyline
+          positions={routeLine}
+          color="#7c3aed"
+          weight={5}
+          opacity={0.8}
+        />
       )}
+
       {from && (
-        <Marker position={[from.lat, from.lng]} icon={markerIcon}>
+        <Marker
+          position={[from.lat, from.lng]}
+          icon={markerIcon}
+        >
           <Popup>Start</Popup>
         </Marker>
       )}
+
       {to && (
-        <Marker position={[to.lat, to.lng]} icon={markerIcon}>
+        <Marker
+          position={[to.lat, to.lng]}
+          icon={markerIcon}
+        >
           <Popup>Destination</Popup>
         </Marker>
       )}
+
       {places.map((place) => (
         <Marker
           key={place.id}
           position={[place.lat, place.lng]}
           icon={markerIcon}
-          eventHandlers={{ click: () => onSelectPlace(place) }}
+          eventHandlers={{
+            click: () => onSelectPlace(place),
+          }}
           opacity={selectedPlaceId === place.id ? 1 : 0.85}
         >
           <Popup>{place.name}</Popup>
