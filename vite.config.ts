@@ -11,8 +11,11 @@ const config = defineConfig({
       projects: ['./tsconfig.json'],
     }),
     tailwindcss(),
-    netlify(),
+
+    // TanStack Start must come before the Netlify adapter
     tanstackStart(),
+    netlify(),
+
     viteReact(),
   ],
 })
