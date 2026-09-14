@@ -12,7 +12,6 @@ const MapView = lazy(() =>
 )
 
 export const Route = createFileRoute('/')({
-  ssr: false,
   component: Home,
 })
 
