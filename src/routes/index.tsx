@@ -1,17 +1,10 @@
-import { createFileRoute } from '@tanstack/react-router'
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type ComponentType,
-} from 'react'
-import { Compass, Navigation, Trophy, Loader2 } from 'lucide-react'
-import type { Place } from '../components/MapView'
-import { PlaceCard } from '../components/PlaceCard'
-import { getUserId } from '../lib/user'
+import { useEffect, useRef } from 'react'
+import type { Place } from './MapView'
 
-interface GeoResult {
+export interface Place {
+  id: number
   name: string
+  category: string
   lat: number
   lng: number
 }
@@ -25,331 +18,226 @@ interface MapViewProps {
   onSelectPlace: (place: Place) => void
 }
 
-type MapViewComponent = ComponentType<MapViewProps>
+declare global {
+  interface Window {
+    L?: any
+  }
+}
 
-export const Route = createFileRoute('/')({
-  component: Home,
-})
-
-function LocationInput({
-  label,
-  value,
-  onSelect,
-}: {
-  label: string
-  value: GeoResult | null
-  onSelect: (v: GeoResult) => void
-}) {
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState<GeoResult[]>([])
-  const [open, setOpen] = useState(false)
+export function MapView({
+  from,
+  to,
+  routeLine,
+  places,
+  selectedPlaceId,
+  onSelectPlace,
+}: MapViewProps) {
+  const mapContainerRef = useRef<HTMLDivElement | null>(null)
+  const mapRef = useRef<any>(null)
+  const layersRef = useRef<any[]>([])
+  const onSelectPlaceRef = useRef(onSelectPlace)
 
   useEffect(() => {
-    if (!query || (value && query === value.name)) {
+    onSelectPlaceRef.current = onSelectPlace
+  }, [onSelectPlace])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
       return
     }
 
-    const timeout = setTimeout(async () => {
-      try {
-        const res = await fetch(
-          `/api/geocode?q=${encodeURIComponent(query)}`,
+    let cancelled = false
+
+    async function loadLeaflet() {
+      if (!window.L) {
+        if (!document.querySelector('link[data-roamer-leaflet]')) {
+          const link = document.createElement('link')
+          link.rel = 'stylesheet'
+          link.href =
+            'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
+          link.setAttribute('data-roamer-leaflet', 'true')
+          document.head.appendChild(link)
+        }
+
+        await new Promise<void>((resolve, reject) => {
+          const existing = document.querySelector(
+            'script[data-roamer-leaflet]',
+          )
+
+          if (existing) {
+            existing.addEventListener('load', () => resolve(), {
+              once: true,
+            })
+            existing.addEventListener('error', () => reject(), {
+              once: true,
+            })
+            return
+          }
+
+          const script = document.createElement('script')
+          script.src =
+            'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
+          script.async = true
+          script.setAttribute('data-roamer-leaflet', 'true')
+
+          script.onload = () => resolve()
+          script.onerror = () => reject()
+
+          document.body.appendChild(script)
+        })
+      }
+
+      if (cancelled || !mapContainerRef.current || !window.L) {
+        return
+      }
+
+      const L = window.L
+
+      if (!mapRef.current) {
+        const center = from ?? to ?? {
+          lat: 20,
+          lng: 0,
+        }
+
+        mapRef.current = L.map(mapContainerRef.current).setView(
+          [center.lat, center.lng],
+          from && to ? 11 : 2,
         )
 
-        if (res.ok) {
-          setResults(await res.json())
-        }
-      } catch {
-        setResults([])
+        L.tileLayer(
+          'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          {
+            attribution:
+              '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+          },
+        ).addTo(mapRef.current)
       }
-    }, 400)
+    }
 
-    return () => clearTimeout(timeout)
-  }, [query, value])
-
-  return (
-    <div className="relative flex-1">
-      <label className="mb-1 block text-xs font-medium text-gray-500">
-        {label}
-      </label>
-
-      <input
-        value={value?.name ?? query}
-        onChange={(e) => {
-          setQuery(e.target.value)
-          setOpen(true)
-        }}
-        onFocus={() => setOpen(true)}
-        placeholder="Search a city or place…"
-        className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:border-violet-400 focus:outline-none"
-      />
-
-      {open && results.length > 0 && (
-        <div className="absolute z-20 mt-1 max-h-60 w-full overflow-auto rounded-xl border border-gray-100 bg-white shadow-lg">
-          {results.map((r) => (
-            <button
-              key={`${r.lat}-${r.lng}`}
-              type="button"
-              className="block w-full truncate px-3 py-2 text-left text-sm hover:bg-violet-50"
-              onClick={() => {
-                onSelect(r)
-                setQuery(r.name)
-                setOpen(false)
-              }}
-            >
-              {r.name}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function sampleWaypoints(
-  coords: Array<[number, number]>,
-  count: number,
-): Array<[number, number]> {
-  if (coords.length === 0) {
-    return []
-  }
-
-  const step = Math.max(1, Math.floor(coords.length / count))
-  const samples: Array<[number, number]> = []
-
-  for (let i = 0; i < coords.length; i += step) {
-    const [lng, lat] = coords[i]
-    samples.push([lat, lng])
-  }
-
-  return samples
-}
-
-function Home() {
-  const [from, setFrom] = useState<GeoResult | null>(null)
-  const [to, setTo] = useState<GeoResult | null>(null)
-  const [routeLine, setRouteLine] = useState<Array<[number, number]>>([])
-  const [routeInfo, setRouteInfo] = useState<{
-    distanceMeters: number
-    durationSeconds: number
-  } | null>(null)
-
-  const [places, setPlaces] = useState<Place[]>([])
-  const [selectedPlace, setSelectedPlace] = useState<Place | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [points, setPoints] = useState(0)
-
-  const [MapViewComponent, setMapViewComponent] =
-    useState<MapViewComponent | null>(null)
-
-  useEffect(() => {
-    let active = true
-
-    import('../components/MapView')
-      .then((module) => {
-        if (active) {
-          setMapViewComponent(() => module.MapView)
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setError('Unable to load the map.')
-        }
-      })
-
-    fetch(`/api/points?userId=${getUserId()}`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (active) {
-          setPoints(d.total ?? 0)
-        }
-      })
-      .catch(() => {})
+    loadLeaflet().catch(() => {
+      if (!cancelled) {
+        console.error('Failed to load Leaflet')
+      }
+    })
 
     return () => {
-      active = false
+      cancelled = true
+    }
+  }, [from, to])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    if (!window.L || !mapRef.current) {
+      return
+    }
+
+    const L = window.L
+    const map = mapRef.current
+
+    layersRef.current.forEach((layer) => {
+      map.removeLayer(layer)
+    })
+
+    layersRef.current = []
+
+    const markerIcon = new L.Icon({
+      iconUrl:
+        'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+      shadowUrl:
+        'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+      iconSize: [25, 41],
+      iconAnchor: [12, 41],
+    })
+
+    if (routeLine.length > 0) {
+      const route = L.polyline(routeLine, {
+        color: '#7c3aed',
+        weight: 5,
+        opacity: 0.8,
+      })
+
+      route.addTo(map)
+      layersRef.current.push(route)
+    }
+
+    if (from) {
+      const marker = L.marker(
+        [from.lat, from.lng],
+        {
+          icon: markerIcon,
+        },
+      )
+
+      marker.bindPopup('Start')
+      marker.addTo(map)
+      layersRef.current.push(marker)
+    }
+
+    if (to) {
+      const marker = L.marker(
+        [to.lat, to.lng],
+        {
+          icon: markerIcon,
+        },
+      )
+
+      marker.bindPopup('Destination')
+      marker.addTo(map)
+      layersRef.current.push(marker)
+    }
+
+    places.forEach((place) => {
+      const marker = L.marker(
+        [place.lat, place.lng],
+        {
+          icon: markerIcon,
+          opacity:
+            selectedPlaceId === place.id ? 1 : 0.85,
+        },
+      )
+
+      marker.bindPopup(place.name)
+
+      marker.on('click', () => {
+        onSelectPlaceRef.current(place)
+      })
+
+      marker.addTo(map)
+      layersRef.current.push(marker)
+    })
+
+    if (from && to) {
+      map.setView([from.lat, from.lng], 11)
+    } else if (from) {
+      map.setView([from.lat, from.lng], 11)
+    } else if (to) {
+      map.setView([to.lat, to.lng], 11)
+    }
+  }, [
+    from,
+    to,
+    routeLine,
+    places,
+    selectedPlaceId,
+  ])
+
+  useEffect(() => {
+    return () => {
+      if (mapRef.current) {
+        mapRef.current.remove()
+        mapRef.current = null
+      }
     }
   }, [])
 
-  async function findRoute() {
-    if (!from || !to) {
-      return
-    }
-
-    setLoading(true)
-    setError(null)
-    setPlaces([])
-    setSelectedPlace(null)
-
-    try {
-      const res = await fetch(
-        `/api/route?from=${from.lat},${from.lng}&to=${to.lat},${to.lng}`,
-      )
-
-      const data = await res.json()
-
-      if (!res.ok) {
-        throw new Error(data.error ?? 'Route not found')
-      }
-
-      setRouteInfo({
-        distanceMeters: data.distanceMeters,
-        durationSeconds: data.durationSeconds,
-      })
-
-      const line = data.geometry.coordinates.map(
-        ([lng, lat]: [number, number]) =>
-          [lat, lng] as [number, number],
-      )
-
-      setRouteLine(line)
-
-      const waypoints = sampleWaypoints(
-        data.geometry.coordinates,
-        6,
-      )
-
-      const pointsParam = waypoints
-        .map(([lat, lng]) => `${lat},${lng}`)
-        .join('|')
-
-      const placesRes = await fetch(
-        `/api/places?points=${pointsParam}`,
-      )
-
-      if (placesRes.ok) {
-        setPlaces(await placesRes.json())
-      }
-    } catch (e) {
-      setError(
-        e instanceof Error ? e.message : 'Something went wrong',
-      )
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const distanceKm = routeInfo
-    ? (routeInfo.distanceMeters / 1000).toFixed(1)
-    : null
-
-  const durationMin = routeInfo
-    ? Math.round(routeInfo.durationSeconds / 60)
-    : null
-
-  const fromLatLng = useMemo(
-    () => (from ? { lat: from.lat, lng: from.lng } : null),
-    [from],
-  )
-
-  const toLatLng = useMemo(
-    () => (to ? { lat: to.lat, lng: to.lng } : null),
-    [to],
-  )
-
   return (
-    <div className="min-h-screen bg-gradient-to-b from-violet-50 to-white">
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-        <header className="mb-6 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Compass className="h-7 w-7 text-violet-600" />
-
-            <h1 className="text-2xl font-bold text-gray-900">
-              Roamer
-            </h1>
-          </div>
-
-          <div className="flex items-center gap-2 rounded-full bg-amber-100 px-4 py-1.5 text-amber-800">
-            <Trophy className="h-4 w-4" />
-
-            <span className="font-semibold">
-              {points} pts
-            </span>
-          </div>
-        </header>
-
-        <div className="mb-6 flex flex-col gap-3 rounded-2xl border border-violet-100 bg-white p-4 shadow-sm sm:flex-row sm:items-end">
-          <LocationInput
-            label="From"
-            value={from}
-            onSelect={setFrom}
-          />
-
-          <LocationInput
-            label="To"
-            value={to}
-            onSelect={setTo}
-          />
-
-          <button
-            type="button"
-            onClick={findRoute}
-            disabled={!from || !to || loading}
-            className="flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:opacity-40"
-          >
-            {loading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Navigation className="h-4 w-4" />
-            )}
-
-            Find best route
-          </button>
-        </div>
-
-        {error && (
-          <p className="mb-4 text-sm text-red-500">
-            {error}
-          </p>
-        )}
-
-        {routeInfo && (
-          <p className="mb-4 text-sm text-gray-600">
-            {distanceKm} km · about {durationMin} min drive ·{' '}
-            {places.length} places found along the way
-          </p>
-        )}
-
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <div className="h-[500px] overflow-hidden rounded-2xl border border-violet-100 shadow-sm lg:col-span-2 lg:h-[650px]">
-            {MapViewComponent ? (
-              <MapViewComponent
-                from={fromLatLng}
-                to={toLatLng}
-                routeLine={routeLine}
-                places={places}
-                selectedPlaceId={selectedPlace?.id ?? null}
-                onSelectPlace={setSelectedPlace}
-              />
-            ) : (
-              <div className="flex h-full w-full animate-pulse items-center justify-center rounded-2xl bg-gray-100">
-                <span className="text-sm text-gray-400">
-                  Loading map…
-                </span>
-              </div>
-            )}
-          </div>
-
-          <div className="max-h-[650px] space-y-3 overflow-y-auto pr-1">
-            {places.length === 0 && (
-              <p className="rounded-2xl border border-dashed border-gray-200 p-6 text-center text-sm text-gray-400">
-                Search a route to discover places along the way —
-                with reels, AI photos, and points for visiting.
-              </p>
-            )}
-
-            {places.map((place) => (
-              <PlaceCard
-                key={place.id}
-                place={place}
-                onPointsEarned={(p) =>
-                  setPoints((prev) => prev + p)
-                }
-              />
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
+    <div
+      ref={mapContainerRef}
+      className="h-full w-full rounded-2xl"
+      style={{ minHeight: '100%' }}
+    />
   )
 }
